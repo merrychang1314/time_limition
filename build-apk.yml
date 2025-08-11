@@ -1,0 +1,182 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python 3.9
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          git \
+          unzip \
+          openjdk-11-jdk \
+          autoconf \
+          automake \
+          libtool \
+          pkg-config \
+          zlib1g-dev \
+          libncurses5-dev \
+          libncursesw5-dev \
+          libtinfo5 \
+          cmake \
+          libffi-dev \
+          libssl-dev \
+          python3-pip \
+          python3-setuptools \
+          ccache \
+          libltdl-dev
+          
+    - name: Set up Java environment
+      run: |
+        echo "JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64" >> $GITHUB_ENV
+        echo "PATH=$PATH:/usr/lib/jvm/java-11-openjdk-amd64/bin" >> $GITHUB_ENV
+        
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install buildozer cython kivy pillow
+        
+    - name: Create app icons
+      run: |
+        python -c "
+from PIL import Image, ImageDraw
+import os
+
+# 创建简单的图标
+def create_simple_icon():
+    size = 512
+    img = Image.new('RGBA', (size, size), (33, 150, 243, 255))
+    draw = ImageDraw.Draw(img)
+    
+    # 绘制简单的时钟图标
+    center = size // 2
+    clock_radius = size // 3
+    
+    # 时钟外圈
+    draw.ellipse([center-clock_radius, center-clock_radius, 
+                 center+clock_radius, center+clock_radius], 
+                outline=(255, 255, 255, 255), width=12)
+    
+    # 时钟指针
+    draw.line([center, center, center-30, center-60], 
+             fill=(255, 255, 255, 255), width=8)
+    draw.line([center, center, center+40, center-80], 
+             fill=(255, 255, 255, 255), width=6)
+    
+    # 中心点
+    draw.ellipse([center-8, center-8, center+8, center+8], 
+                fill=(255, 255, 255, 255))
+    
+    img.save('icon.png')
+    print('Icon created: icon.png')
+
+# 创建启动画面
+def create_simple_presplash():
+    width, height = 800, 1280
+    img = Image.new('RGB', (width, height), (33, 150, 243))
+    img.save('presplash.png')
+    print('Presplash created: presplash.png')
+
+create_simple_icon()
+create_simple_presplash()
+        "
+        
+    - name: Prepare build environment
+      run: |
+        # 确保main.py存在
+        if [ ! -f main.py ]; then
+          echo 'main.py not found, creating basic version...'
+          exit 1
+        fi
+        
+        # 创建必要的目录
+        mkdir -p .buildozer
+        
+        # 显示文件列表
+        echo "Project files:"
+        ls -la
+        
+    - name: Initialize buildozer
+      run: |
+        buildozer init || echo "Buildozer init completed"
+        
+    - name: Build APK with Buildozer
+      run: |
+        # 设置环境变量
+        export ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk
+        export ANDROID_SDK_ROOT=$ANDROID_HOME
+        export PATH=$PATH:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools
+        
+        # 构建APK
+        buildozer android debug --verbose
+        
+    - name: List generated files
+      run: |
+        echo "Generated files:"
+        find . -name "*.apk" -type f
+        ls -la bin/ || echo "No bin directory found"
+        find .buildozer -name "*.apk" -type f || echo "No APK found in .buildozer"
+        
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: phone-limiter-apk
+        path: |
+          bin/*.apk
+          .buildozer/android/platform/build-*/build/outputs/apk/debug/*.apk
+        if-no-files-found: warn
+        
+    - name: Upload build logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-logs
+        path: |
+          .buildozer/
+          *.log
+        if-no-files-found: ignore
+        
+    - name: Create Release
+      if: github.ref == 'refs/heads/main' && success()
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v1.0.${{ github.run_number }}
+        name: Phone Time Limiter v1.0.${{ github.run_number }}
+        body: |
+          手机时间限制器 Android APK
+          
+          功能特性：
+          - 设定时间后进入只能拨打电话的模式
+          - 密码保护解锁功能
+          - 紧急呼叫功能
+          - 倒计时显示
+          
+          安装说明：
+          1. 下载 APK 文件
+          2. 在 Android 设备上启用"未知来源"安装
+          3. 安装并运行应用
+        files: |
+          bin/*.apk
+          .buildozer/android/platform/build-*/build/outputs/apk/debug/*.apk
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
